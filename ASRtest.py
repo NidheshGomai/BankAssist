@@ -1,11 +1,3 @@
-from huggingface_hub import InferenceClient
+from transformers import pipeline
 
-client = InferenceClient(
-    provider="hf-inference",
-    api_key="YOUR_HF_TOKEN"
-)
-
-with open("06-20-2026 19.48(2) (2).m4a", "rb") as f:
-    result = client.automatic_speech_recognition(f)
-
-print(result)
+pipe = pipeline("automatic-speech-recognition", model="parthiv11/indic_whisper_nodcil")

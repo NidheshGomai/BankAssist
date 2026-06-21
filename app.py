@@ -29,7 +29,7 @@ SUPPORTED_LANGUAGES = {
     "pa": "Punjabi",
 }
 
-ASR_MODEL = "parthiv11/indic_whisper_nodcil"
+ASR_MODEL = "openai/whisper-medium"
 TRANSLATION_SRC_TO_EN = {
     "hi": "ai4bharat/indic-trans2-hi-en",
     "bn": "ai4bharat/indic-trans2-bn-en",
