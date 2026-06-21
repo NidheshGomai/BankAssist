@@ -1,0 +1,21 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.env
+.streamlit/secrets.toml
+
+06-20-2026 19.48(2) (2).m4a
+uv.lock
+config.toml
+settings.json
+
+pyproject.toml
+
+.python-version
