@@ -1,0 +1,82 @@
+# =============================================================================
+# BankAssist RAG — Requirements
+# =============================================================================
+# Install with: pip install -r requirements_rag.txt
+# For GPU support: ensure CUDA 12.x drivers and torch+cu124 are already
+# installed via pyproject.toml / uv.
+# =============================================================================
+
+# --- Core Framework ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9          # File uploads
+
+# --- Settings & Config ---
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+
+# --- Structured Logging ---
+structlog>=24.1.0
+
+# --- HTTP Client (async) ---
+httpx>=0.27.0
+tenacity>=8.3.0                  # Retry logic
+
+# --- Google Drive API ---
+google-api-python-client>=2.130.0
+google-auth>=2.29.0
+google-auth-oauthlib>=1.2.0
+
+# --- PDF Parsing ---
+pymupdf>=1.24.0                  # PyMuPDF (fitz) — primary parser
+pdfplumber>=0.11.0               # Secondary parser + table extraction
+Pillow>=10.3.0                   # Image processing support
+
+# --- ML & Embeddings ---
+# torch, transformers already in pyproject.toml / requirements.txt
+sentence-transformers>=3.0.0     # BGE-M3 interface
+FlagEmbedding>=1.2.9             # BAAI/bge-m3 + bge-reranker-large
+accelerate>=0.30.0               # Model loading acceleration
+bitsandbytes>=0.43.0             # 4-bit / 8-bit quantization
+peft>=0.11.0                     # LoRA adapter loading
+
+# --- Vector Database ---
+chromadb>=0.5.0
+
+# --- Sparse Retrieval (BM25) ---
+rank-bm25>=0.2.2
+
+# --- LangChain + LangGraph ---
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-core>=0.2.0
+langgraph>=0.1.0
+
+# --- Tokenization ---
+tiktoken>=0.7.0                  # Fast tokenizer for token counting
+
+# --- Monitoring ---
+prometheus-client>=0.20.0
+opentelemetry-api>=1.24.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-exporter-otlp-proto-grpc>=1.24.0
+
+# --- Evaluation ---
+ragas>=0.1.14
+datasets>=2.20.0
+
+# --- Testing ---
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
+pytest-cov>=5.0.0
+httpx>=0.27.0                    # For FastAPI test client
+
+# --- Utilities ---
+numpy>=1.26.0
+scipy>=1.13.0
+tqdm>=4.66.0
+aiofiles>=23.2.0
+click>=8.1.0                     # CLI utilities
+rich>=13.7.0                     # Pretty console output

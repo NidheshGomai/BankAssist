@@ -1,21 +1,85 @@
-# Python-generated files
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
 build/
 dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
 wheels/
-*.egg-info
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Virtual environments
-.venv
-.env
+# Pytest & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.nox/
+.tox/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+venv_py312/
+.python-version
+
+# IDE and editors
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+
+# Streamlit secrets (Streamlit config can be tracked, but not secrets)
 .streamlit/secrets.toml
 
-06-20-2026 19.48(2) (2).m4a
-uv.lock
-config.toml
-settings.json
+# Local Environment Variables
+.env
 
-pyproject.toml
+# Sensitive Credentials / API Keys
+config/google_service_account.json
 
-.python-version
+# Local Data / Vector Databases / Caches
+data/
+bank_data/
+*.db
+*.sqlite3
+
+# Large ML Models & Fine-Tuning Checkpoints / Event logs
+fine tuned qwen/
+**/checkpoint-*/
+*.bin
+*.pt
+*.pth
+*.safetensors
+**/events.out.tfevents.*
+training_log.jsonl
+
+# Logs and Debug files
+*.log
+ingest_debug_output.txt
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Audio recordings / temporary media
+*.m4a
+*.mp3
+*.wav

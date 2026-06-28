@@ -1,0 +1,251 @@
+# =============================================================================
+# BankAssist RAG System — Central Configuration
+# =============================================================================
+# All tuneable parameters live here. Values here are defaults.
+# Override via environment variables (see .env) or by editing this file.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Application
+# -----------------------------------------------------------------------------
+app:
+  name: "BankAssist RAG"
+  version: "1.0.0"
+  environment: "development"           # development | staging | production
+  debug: false
+  api_host: "0.0.0.0"
+  api_port: 8000
+  api_prefix: "/api/v1"
+  log_level: "INFO"                    # DEBUG | INFO | WARNING | ERROR
+  request_timeout_seconds: 120
+
+# -----------------------------------------------------------------------------
+# Data Directories
+# -----------------------------------------------------------------------------
+paths:
+  data_dir: "data"
+  pdf_cache_dir: "data/pdfs"
+  chromadb_dir: "data/chromadb"
+  registry_db: "data/registry.db"
+  embedding_cache_db: "data/embedding_cache.db"
+  checkpoint_file: "data/ingestion_checkpoint.json"
+  links_file: "bank_data/links.json"
+
+# -----------------------------------------------------------------------------
+# Models
+# -----------------------------------------------------------------------------
+models:
+  # Embedding model
+  embedding:
+    model_name: "BAAI/bge-m3"
+    batch_size: 32
+    max_length: 1024
+    normalize_embeddings: true
+    device: "auto"                     # auto | cuda | cpu
+    cache_embeddings: true
+
+  # Reranker model
+  reranker:
+    model_name: "BAAI/bge-reranker-large"
+    batch_size: 16
+    max_length: 512
+    device: "auto"
+    enabled: true
+
+  # LLM — Fine-tuned Qwen3-4B
+  # Qwen3-4B is locally cached at:
+  #   C:\Users\Nidhesh Gomai\.cache\huggingface\hub\models--Qwen--Qwen3-4B
+  # Use the HF repo ID — transformers resolves from cache automatically.
+  llm:
+    base_model: "Qwen/Qwen3-4B"
+    lora_adapter_path: "fine tuned qwen/QWEN3 QA final"
+    quantization: "4bit"               # none | 4bit | 8bit
+    device: "auto"
+    max_new_tokens: 1024
+    temperature: 0.1                   # Low temperature for factual accuracy
+    top_p: 0.9
+    do_sample: false                   # Greedy for max reproducibility
+    repetition_penalty: 1.1
+    stream: true
+    thinking_mode: false               # Qwen3 thinking mode
+
+# -----------------------------------------------------------------------------
+# Ingestion Pipeline
+# -----------------------------------------------------------------------------
+ingestion:
+  # HTTP downloader — disabled (using Google Drive as sole source)
+  http:
+    enabled: false                     # Set true to re-enable URL-based ingestion from links.json
+    timeout_seconds: 60
+    max_retries: 5
+    retry_backoff_base: 2.0
+    retry_backoff_max: 60.0
+    concurrent_downloads: 3
+    user_agent: "BankAssist-RAG/1.0 (+https://unionbankofindia.bank.in)"
+
+  # Google Drive — PRIMARY source (folder: bank_docs)
+  # Folder ID: 1Bsu_Ol0o6kMSP7_MLL2Pos0Ey0MyOlWJ
+  google_drive:
+    enabled: true                      # Sole active ingestion source
+    poll_interval_seconds: 300
+    scopes:
+      - "https://www.googleapis.com/auth/drive.readonly"
+
+  # Ingestion behavior
+  force_reindex: false                 # Re-ingest all docs even if hash unchanged
+  delete_orphans: true                 # Remove chunks for deleted docs
+
+# -----------------------------------------------------------------------------
+# PDF Parser
+# -----------------------------------------------------------------------------
+parser:
+  primary_engine: "pymupdf"            # pymupdf | pdfplumber
+  fallback_engine: "pdfplumber"
+  extract_tables: true
+  extract_images: false                # OCR not enabled by default
+  min_font_size_h1: 16
+  min_font_size_h2: 13
+  min_font_size_h3: 11
+  min_font_size_h4: 10.5
+  bold_weight_threshold: 600           # Font weight >= this → consider bold
+  footnote_y_threshold: 0.88           # Page fraction — below = potential footnote
+
+# -----------------------------------------------------------------------------
+# Chunking
+# -----------------------------------------------------------------------------
+chunking:
+  # Structure-aware (H1/H2/H3/H4 boundaries)
+  structure:
+    enabled: true
+    max_tokens: 1500
+    min_tokens: 100
+    overlap_tokens: 50
+
+  # Parent-child
+  parent_child:
+    enabled: true
+    parent_tokens: 1200
+    child_tokens: 300
+    child_overlap_tokens: 50
+
+  # Table chunks
+  table:
+    enabled: true
+    max_table_tokens: 2000
+    row_chunk_if_exceeds: 1500
+
+  # Default tokenizer for token counting
+  tokenizer: "Qwen/Qwen3-4B"
+  fallback_chars_per_token: 4
+
+# -----------------------------------------------------------------------------
+# Vector Database (ChromaDB)
+# -----------------------------------------------------------------------------
+vectordb:
+  collection_name: "bankassist_chunks"
+  parent_collection_name: "bankassist_parents"
+  distance_metric: "cosine"
+  embedding_dimension: 1024            # BGE-M3 output dimension
+
+# -----------------------------------------------------------------------------
+# Retrieval Pipeline
+# -----------------------------------------------------------------------------
+retrieval:
+  # Stage 1: Query rewriting
+  query_rewrite:
+    enabled: true
+    max_history_turns: 5
+
+  # Stage 2: Multi-query
+  multi_query:
+    enabled: true
+    num_variants: 3
+
+  # Stage 3: Hybrid retrieval
+  hybrid:
+    dense_top_k: 20
+    sparse_top_k: 20
+    rrf_k: 60                          # RRF constant
+    final_top_k: 10
+
+  # Stage 4: Metadata filtering
+  metadata_filter:
+    enabled: true
+
+  # Stage 5: Reranker
+  reranker:
+    top_k: 8                           # Keep top-k after reranking
+
+  # Stage 6: Contextual compression
+  compression:
+    enabled: true
+    similarity_threshold: 0.92         # Deduplicate chunks with cosine > this
+
+  # Stage 7: Parent expansion
+  parent_expansion:
+    enabled: true
+
+# -----------------------------------------------------------------------------
+# Answer Generation
+# -----------------------------------------------------------------------------
+generation:
+  # Evidence extraction
+  evidence_extraction:
+    enabled: true
+    max_evidence_passages: 10
+
+  # Confidence scoring
+  confidence:
+    min_threshold: 0.40                # Refuse if overall confidence < this
+    retrieval_weight: 0.35
+    generation_weight: 0.30
+    citation_weight: 0.35
+
+  # Hallucination guard
+  hallucination_guard:
+    enabled: true
+    min_citation_overlap: 0.5         # Min sentence overlap for validation
+    require_citations: true
+
+# -----------------------------------------------------------------------------
+# Conversational Memory
+# -----------------------------------------------------------------------------
+memory:
+  short_term:
+    max_turns: 10
+  long_term:
+    enabled: true
+    collection_name: "bankassist_memory"
+    top_k: 3
+  entity_tracking:
+    enabled: true
+  topic_tracking:
+    enabled: true
+
+# -----------------------------------------------------------------------------
+# Session Management
+# -----------------------------------------------------------------------------
+session:
+  max_active_sessions: 100
+  session_ttl_minutes: 60
+  auto_summarize_on_close: true
+
+# -----------------------------------------------------------------------------
+# Monitoring
+# -----------------------------------------------------------------------------
+monitoring:
+  prometheus:
+    enabled: true
+    endpoint: "/metrics"
+  opentelemetry:
+    enabled: false
+    service_name: "bankassist-rag"
+    otlp_endpoint: "http://localhost:4317"
+
+# -----------------------------------------------------------------------------
+# Rate Limiting
+# -----------------------------------------------------------------------------
+rate_limiting:
+  enabled: true
+  requests_per_minute: 60
+  burst: 10
