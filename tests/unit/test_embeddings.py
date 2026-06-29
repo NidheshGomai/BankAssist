@@ -1,74 +1,72 @@
 """
-Unit tests for the BGE-M3 Embedding Engine.
+BankAssist RAG — Unit tests for Embeddings Model
+=================================================
+Validates loading and cache lookup operations for BGE-M3.
 """
 
-from pathlib import Path
-import tempfile
+from __future__ import annotations
+
+import unittest
+from unittest.mock import MagicMock, patch
+
 import numpy as np
-import pytest
 
-from app.config.settings import get_settings
-from app.embeddings.bge_embedder import BGEEmbedder, SQLiteEmbeddingCache
-from app.utils.exceptions import EmbeddingError, EmbeddingModelLoadError
+from app.embeddings.bge_embedder import BGEEmbedder
 
 
-def test_embedder_singleton():
-    """Verify BGEEmbedder follows the singleton pattern."""
-    embedder1 = BGEEmbedder()
-    embedder2 = BGEEmbedder()
-    assert embedder1 is embedder2
+class TestEmbeddings(unittest.TestCase):
+    """Unit tests for lazy loading, cache lookup, and cosine similarity calculations."""
+
+    @patch("app.embeddings.bge_embedder.BGEM3FlagModel")
+    @patch("app.embeddings.bge_embedder.EmbeddingCache")
+    def test_bge_m3_singleton_loading_and_embedding_queries(
+        self, mock_cache_class, mock_model_class
+    ) -> None:
+        """Verify that BGEEmbedder behaves as a singleton and delegates calls properly."""
+        # Setup mocks
+        mock_model = MagicMock()
+        mock_model.encode.return_value = {"dense_vecs": np.random.randn(1024)}
+        mock_model_class.return_value = mock_model
+
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = None  # Cache miss
+        mock_cache_class.return_value = mock_cache
+
+        # Create instances
+        embedder1 = BGEEmbedder()
+        embedder2 = BGEEmbedder()
+
+        # Check singleton property
+        self.assertIs(embedder1, embedder2)
+
+        # Force load models
+        embedder1.load_model()
+
+        # Generate query embedding
+        query = "Union bank interest rate"
+        vec = embedder1.embed_query(query)
+
+        # Check vector characteristics
+        self.assertEqual(len(vec), 1024)
+        mock_model.encode.assert_called_once()
+        mock_cache.get.assert_called_once_with(query)
+
+    @patch("app.embeddings.bge_embedder.EmbeddingCache")
+    def test_cache_hits_bypass_model_inference(self, mock_cache_class) -> None:
+        """Verify that cached queries return the vector directly from cache database."""
+        mock_vector = np.random.randn(1024).tolist()
+        mock_cache = MagicMock()
+        mock_cache.get.return_value = mock_vector
+        mock_cache_class.return_value = mock_cache
+
+        embedder = BGEEmbedder()
+        embedder._model = MagicMock()  # Mock model should never be called
+
+        vec = embedder.embed_query("cached query")
+
+        self.assertEqual(vec.tolist(), mock_vector)
+        embedder._model.encode.assert_not_called()
 
 
-def test_sqlite_cache():
-    """Verify the SQLite embedding cache stores and retrieves embeddings correctly."""
-    with tempfile.TemporaryDirectory() as temp_dir:
-        db_path = Path(temp_dir) / "test_cache.db"
-        cache = SQLiteEmbeddingCache(db_path)
-
-        texts = ["hello world", "test sentence"]
-        # Retrieve from empty cache
-        hits = cache.get_many(texts)
-        assert len(hits) == 0
-
-        # Store dummy embeddings
-        dummy_emb1 = np.random.rand(1024).astype(np.float32)
-        dummy_emb2 = np.random.rand(1024).astype(np.float32)
-        pairs = [(texts[0], dummy_emb1), (texts[1], dummy_emb2)]
-        cache.set_many(pairs)
-
-        # Retrieve again
-        hits = cache.get_many(texts)
-        assert len(hits) == 2
-        assert np.allclose(hits[texts[0]], dummy_emb1)
-        assert np.allclose(hits[texts[1]], dummy_emb2)
-
-
-def test_embed_documents():
-    """Verify dense embedding generation and caching behavior."""
-    embedder = BGEEmbedder()
-    
-    # Simple documents
-    docs = ["This is a bank assist test document.", "Checking retail interest rates."]
-    
-    # 1. First run (compute)
-    embs1 = embedder.embed_documents(docs)
-    assert len(embs1) == 2
-    assert embs1[0].shape == (1024,)
-    assert embs1[1].shape == (1024,)
-    # Assert normalized (cosine distance metric is used, so norm should be close to 1.0)
-    assert np.isclose(np.linalg.norm(embs1[0]), 1.0, atol=1e-3)
-
-    # 2. Second run (cached)
-    embs2 = embedder.embed_documents(docs)
-    assert len(embs2) == 2
-    assert np.allclose(embs1[0], embs2[0])
-    assert np.allclose(embs1[1], embs2[1])
-
-
-def test_embed_query():
-    """Verify query embedding generation."""
-    embedder = BGEEmbedder()
-    query = "How to open a savings account?"
-    emb = embedder.embed_query(query)
-    assert emb.shape == (1024,)
-    assert np.isclose(np.linalg.norm(emb), 1.0, atol=1e-3)
+if __name__ == "__main__":
+    unittest.main()

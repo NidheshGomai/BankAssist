@@ -62,16 +62,107 @@ class IngestionPipeline:
 
     def __init__(
         self,
-        settings: Settings,
-        registry: DocumentRegistry,
-        process_callback: ProcessCallback,
+        settings: Settings | None = None,
+        registry: DocumentRegistry | None = None,
+        process_callback: ProcessCallback | None = None,
     ) -> None:
-        self._settings = settings
-        self._registry = registry
-        self._process_callback = process_callback
+        from app.config.settings import get_settings  # noqa: PLC0415
+        self._settings = settings or get_settings()
+        self._registry = registry or DocumentRegistry(self._settings.registry_db)
+        self._process_callback = process_callback or self._default_process_callback
         self._checkpoint = IngestionCheckpoint.load(
-            str(settings.checkpoint_file)
+            str(self._settings.checkpoint_file)
         )
+
+    async def _default_process_callback(
+        self, record: DocumentRecord, pdf_bytes: bytes
+    ) -> tuple[int, int]:
+        """Default document processing function: parses, chunks, embeds, and indexes."""
+        from app.parser.pdf_parser import PDFParser  # noqa: PLC0415
+        from app.chunking.orchestrator import ChunkingOrchestrator  # noqa: PLC0415
+        from app.vectordb.chroma_store import ChromaStore  # noqa: PLC0415
+
+        parser = PDFParser(self._settings)
+        chunker = ChunkingOrchestrator(self._settings)
+        store = ChromaStore()
+
+        # 1. Parse PDF
+        parsed_doc = parser.parse(
+            pdf_bytes, doc_id=record.doc_id, title=record.title
+        )
+
+        # 2. Chunk document
+        chunks = chunker.chunk_document(parsed_doc, record)
+
+        # 3. Embed & upsert
+        main_count, parent_count = store.upsert_chunks(chunks)
+
+        # We return (main_count + parent_count, parsed_doc.page_count)
+        return main_count + parent_count, parsed_doc.page_count
+
+    def ingest_single_file(
+        self,
+        file_path: Path,
+        category: str,
+        title: str,
+    ) -> tuple[DocumentRecord, int, int]:
+        """
+        Synchronously ingest a single locally uploaded PDF file.
+        Used by the /upload route.
+        """
+        import uuid  # noqa: PLC0415
+        from datetime import datetime, timezone  # noqa: PLC0415
+
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+
+        doc_id = f"doc_{uuid.uuid4().hex[:12]}"
+        pdf_bytes = file_path.read_bytes()
+        content_hash = DocumentRecord.compute_hash(pdf_bytes)
+
+        # Check if already processed
+        existing = self._registry.get_by_hash(content_hash)
+        if existing and existing.status == DocumentStatus.INDEXED:
+            return existing, existing.chunk_count, 0
+
+        record = DocumentRecord(
+            doc_id=doc_id,
+            title=title,
+            source=DocumentSource.LOCAL_UPLOAD,
+            source_url=f"local://{file_path.name}",
+            local_path=str(file_path),
+            content_hash=content_hash,
+            category=category,
+            status=DocumentStatus.PENDING,
+        )
+        self._registry.upsert(record)
+
+        try:
+            # Run default callback synchronously using asyncio
+            loop = asyncio.get_event_loop()
+            
+            record.status = DocumentStatus.CHUNKING
+            self._registry.upsert(record)
+            
+            chunk_count, page_count = loop.run_until_complete(
+                self._process_callback(record, pdf_bytes)
+            )
+
+            record.mark_indexed(chunk_count, page_count)
+            record.status = DocumentStatus.INDEXED
+            record.last_indexed_at = datetime.now(timezone.utc)
+            self._registry.upsert(record)
+
+            # Split total chunks count roughly into main and parent for response
+            parent_est = int(chunk_count * 0.25)
+            main_est = chunk_count - parent_est
+
+            return record, main_est, parent_est
+
+        except Exception as exc:
+            record.mark_failed(str(exc))
+            self._registry.upsert(record)
+            raise exc
 
     # -----------------------------------------------------------------------
     # Full Pipeline Run

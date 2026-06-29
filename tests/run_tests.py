@@ -3,7 +3,8 @@ Standard Python unittest runner for BankAssist RAG tests.
 Avoids pytest's assertion-rewriting DLL loading issues on Windows.
 """
 
-from FlagEmbedding import BGEM3FlagModel  # CRITICAL: Import first to prevent DLL conflicts
+# CRITICAL: Import FlagEmbedding first to ensure correct DLL load order on Windows
+from FlagEmbedding import FlagReranker, BGEM3FlagModel
 
 import sys
 import unittest
@@ -14,29 +15,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
-class TestEmbeddings(unittest.TestCase):
-
-    def test_singleton(self) -> None:
-        from tests.unit.test_embeddings import test_embedder_singleton
-        test_embedder_singleton()
-
-    def test_cache(self) -> None:
-        from tests.unit.test_embeddings import test_sqlite_cache
-        test_sqlite_cache()
-
-    def test_embed_documents(self) -> None:
-        from tests.unit.test_embeddings import test_embed_documents
-        test_embed_documents()
-
-    def test_embed_query(self) -> None:
-        from tests.unit.test_embeddings import test_embed_query
-        test_embed_query()
-
-
-# Import TestChromaDB which is already a unittest.TestCase
-from tests.unit.test_vectordb import TestChromaDB
+def run_test_suite() -> bool:
+    """Discover and run all unittest cases in the tests/ folder."""
+    print(f"Discovering and running BankAssist RAG tests under: {PROJECT_ROOT}")
+    
+    loader = unittest.TestLoader()
+    suite = loader.discover(
+        start_dir=str(PROJECT_ROOT / "tests"),
+        pattern="test_*.py",
+    )
+    
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    return result.wasSuccessful()
 
 
 if __name__ == "__main__":
-    print(f"Running unit tests under: {PROJECT_ROOT}")
-    unittest.main()
+    success = run_test_suite()
+    sys.exit(0 if success else 1)
