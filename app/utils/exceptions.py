@@ -31,12 +31,15 @@ class BankAssistError(Exception):
         *,
         error_code: str | None = None,
         details: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> None:
         super().__init__(message)
         self.message = message
         if error_code:
             self.error_code = error_code
-        self.details: dict[str, Any] = details or {}
+        self.details = details or {}
+        if kwargs:
+            self.details.update(kwargs)
 
     def to_dict(self) -> dict[str, Any]:
         return {

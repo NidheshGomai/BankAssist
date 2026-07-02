@@ -11,6 +11,24 @@ Run using:
 from __future__ import annotations
 
 import os
+# CRITICAL: Prevent OpenMP runtime conflicts which cause Access Violation (0xc0000005) in arrow.dll on Windows.
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["ARROW_IO_THREADS"] = "1"
+os.environ["ARROW_ENABLE_THREAD_POOL"] = "0"
+
+try:
+    import pyarrow as pa
+    pa.set_cpu_count(1)
+    pa.set_io_thread_count(1)
+except ImportError:
+    pass
+
+# CRITICAL: FlagEmbedding must be imported at the absolute top on Windows to prevent DLL load order crashes.
+try:
+    import FlagEmbedding
+except ImportError:
+    pass
+
 import sys
 import time
 from pathlib import Path
@@ -29,6 +47,7 @@ from app.ingestion.registry import DocumentRegistry
 from app.monitoring.tracer import PipelineTracer
 from app.vectordb.collection_manager import CollectionManager
 from app.vectordb.chroma_store import ChromaStore
+from app.retriever.pipeline import RetrievalResult
 
 # Page Config
 st.set_page_config(
@@ -237,7 +256,7 @@ with tab_chat:
                     # Extract values
                     answer = state.get("final_answer", "")
                     citations = state.get("citations", [])
-                    ret_result = state.get("retrieval_result")
+                    ret_result = state.get("retrieval_result") or RetrievalResult()
                     conf_res = state.get("confidence_result")
                     
                     response_container.markdown(answer)
@@ -282,7 +301,8 @@ with tab_chat:
                     with col2:
                         st.metric("Retrieval Latency", f"{ret_result.latency_ms:.1f} ms" if ret_result else "N/A")
                     with col3:
-                        st.metric("Sub-Queries Executed", len(state.get("rewritten_query", "").splitlines()))
+                        stage_counts = ret_result.stage_counts if ret_result else {}
+                        st.metric("Sub-Queries Executed", stage_counts.get("stage1_sub_queries", 1))
 
                     # Complete trace
                     tracer.finish_trace(trace)
@@ -328,7 +348,7 @@ with tab_documents:
                 with st.spinner("Running parsing, hierarchical chunking, embedding, and indexing..."):
                     try:
                         pipeline = IngestionPipeline()
-                        record, main_count, parent_count = pipeline.ingest_single_file(
+                        record, main_count, parent_count = pipeline.ingest_single_file_sync(
                             file_path=temp_path,
                             category=category,
                             title=custom_title or uploaded_file.name.rsplit(".", 1)[0]
@@ -377,16 +397,27 @@ with tab_diagnostics:
     # 1. System Metrics Display
     st.subheader("Core Statistics")
     
-    # Fetch registry doc count
-    try:
-        indexed_docs = len(registry.get_all_documents())
-    except Exception:
-        indexed_docs = 0
+    # Use session state to cache stats (only loaded on button click)
+    if "diag_stats_loaded" not in st.session_state:
+        st.session_state.diag_stats_loaded = False
+        st.session_state.diag_indexed_docs = "—"
+        st.session_state.diag_main_count = "—"
+        st.session_state.diag_parent_count = "—"
 
-    # Fetch vector DB counts
-    stats = collection_mgr.get_stats()
-    main_count = stats.get("main_chunk_count", 0)
-    parent_count = stats.get("parent_chunk_count", 0)
+    if st.button("🔄 Refresh Statistics", use_container_width=True):
+        with st.spinner("Fetching database statistics..."):
+            try:
+                st.session_state.diag_indexed_docs = len(registry.get_all_documents())
+            except Exception:
+                st.session_state.diag_indexed_docs = 0
+            stats = collection_mgr.get_stats()
+            st.session_state.diag_main_count = stats.get("main_chunk_count", 0)
+            st.session_state.diag_parent_count = stats.get("parent_chunk_count", 0)
+            st.session_state.diag_stats_loaded = True
+
+    indexed_docs = st.session_state.diag_indexed_docs
+    main_count = st.session_state.diag_main_count
+    parent_count = st.session_state.diag_parent_count
 
     mcol1, mcol2, mcol3, mcol4 = st.columns(4)
     with mcol1:

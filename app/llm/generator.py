@@ -30,6 +30,8 @@ import re
 import time
 from dataclasses import dataclass, field
 
+import torch
+
 from app.config.settings import get_settings
 from app.llm.qwen3_loader import get_qwen3_model
 from app.prompts.evidence_extraction_prompt import (
@@ -114,7 +116,7 @@ class AnswerGenerator:
                 refusal_reason="no_chunks_retrieved",
             )
 
-        context = retrieval_result.to_context_string(max_chunks=8)
+        context = retrieval_result.to_context_string(max_chunks=self.settings.llm_max_context_chunks)
 
         # Stage A: Evidence extraction
         t0 = time.perf_counter()
@@ -133,6 +135,9 @@ class AnswerGenerator:
 
         # Stage B: Answer generation
         t0 = time.perf_counter()
+        # Free VRAM between LLM calls (critical for 6GB GPUs)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         answer = self._generate_answer(evidence, query, history)
         answer_ms = round((time.perf_counter() - t0) * 1000, 1)
 
@@ -188,7 +193,7 @@ class AnswerGenerator:
             })
             return
 
-        context = retrieval_result.to_context_string(max_chunks=8)
+        context = retrieval_result.to_context_string(max_chunks=self.settings.llm_max_context_chunks)
 
         # Stage A: Evidence extraction (non-streaming, fast)
         evidence = self._extract_evidence(context, query)
@@ -241,7 +246,7 @@ class AnswerGenerator:
             prompt = build_evidence_extraction_prompt(context, query)
             evidence = self._llm.generate_text(
                 prompt=prompt,
-                max_new_tokens=512,
+                max_new_tokens=256,
                 temperature=0.05,
                 do_sample=False,
             )

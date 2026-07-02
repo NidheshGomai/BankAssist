@@ -15,3 +15,4 @@ level = "info"
 [server]
 runOnSave = true
 headless = true
+websocketPingInterval = 360

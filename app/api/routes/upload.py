@@ -91,7 +91,7 @@ async def upload_document(
         # Ingest the single file
         # We wrap this to run synchronously inside the async endpoint
         logger.info("processing_uploaded_document", path=str(file_path))
-        doc_record, main_count, parent_count = pipeline.ingest_single_file(
+        doc_record, main_count, parent_count = await pipeline.ingest_single_file(
             file_path=file_path,
             category=category,
             title=doc_title or file.filename.rsplit(".", 1)[0],

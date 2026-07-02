@@ -27,11 +27,11 @@ native C++ libs to prevent access violation crashes on Windows.
 
 from __future__ import annotations
 
-# CRITICAL: FlagEmbedding import MUST be first on Windows to ensure correct DLL load order
-from FlagEmbedding import FlagReranker
-
 import threading
 from typing import Any
+
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from app.chunking.base import EnrichedChunk
 from app.config.settings import get_settings
@@ -74,6 +74,7 @@ class BGEReranker:
         self.enabled = self.settings.reranker_enabled
 
         self._model: Any = None
+        self._tokenizer: Any = None
         self._model_lock = threading.Lock()
         self._initialized = True
 
@@ -85,7 +86,7 @@ class BGEReranker:
         )
 
     def load_model(self) -> None:
-        """Lazily load the FlagReranker model under a thread lock."""
+        """Lazily load the tokenizer and model under a thread lock."""
         if self._model is not None:
             return
 
@@ -96,19 +97,50 @@ class BGEReranker:
             try:
                 logger.info("loading_reranker_model", model=self.model_name)
 
-                use_fp16 = "cuda" in self.device
+                self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                
+                model_kwargs = {
+                    "trust_remote_code": True,
+                    "low_cpu_mem_usage": True,
+                }
+                if "cuda" in self.device:
+                    model_kwargs["torch_dtype"] = torch.float16
+                else:
+                    model_kwargs["torch_dtype"] = torch.float32
 
-                self._model = FlagReranker(
-                    model_name_or_path=self.model_name,
-                    use_fp16=use_fp16,
-                    device=self.device,
+                self._model = AutoModelForSequenceClassification.from_pretrained(
+                    self.model_name,
+                    **model_kwargs
                 )
+                self._model.to(self.device)
+                self._model.eval()
 
                 logger.info("reranker_model_loaded_successfully", model=self.model_name)
 
             except Exception as exc:
                 logger.error("reranker_model_load_failed", model=self.model_name, error=str(exc))
                 raise RerankerError(f"Failed to load reranker model {self.model_name}: {exc}") from exc
+
+    def unload_model(self) -> None:
+        """
+        Unload the reranker model from memory to free VRAM/RAM.
+        Used for sequential VRAM handoff on low-memory systems.
+        The model will be lazily reloaded on the next rerank call.
+        """
+        with self._model_lock:
+            if self._model is not None:
+                logger.info("unloading_reranker_model", model=self.model_name)
+                del self._model
+                del self._tokenizer
+                self._model = None
+                self._tokenizer = None
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                import gc  # noqa: PLC0415
+                gc.collect()
+                logger.info("reranker_model_unloaded_successfully")
 
     def rerank(
         self,
@@ -150,14 +182,29 @@ class BGEReranker:
                 top_k=k,
             )
 
+            scores = []
             with self._model_lock:
-                # FlagReranker.compute_score returns list[float], sigmoid=True gives [0,1]
-                scores: list[float] = self._model.compute_score(
-                    pairs,
-                    batch_size=self.batch_size,
-                    max_length=self.max_length,
-                    normalize=True,  # Returns sigmoid-normalized scores
-                )
+                for i in range(0, len(pairs), self.batch_size):
+                    batch = pairs[i : i + self.batch_size]
+                    
+                    texts = [p[0] for p in batch]
+                    text_pairs = [p[1] for p in batch]
+                    
+                    inputs = self._tokenizer(
+                        texts,
+                        text_pairs,
+                        padding=True,
+                        truncation=True,
+                        max_length=self.max_length,
+                        return_tensors="pt"
+                    ).to(self.device)
+                    
+                    with torch.no_grad():
+                        logits = self._model(**inputs).logits.squeeze(-1)
+                        batch_scores = torch.sigmoid(logits).cpu().tolist()
+                        if isinstance(batch_scores, float):
+                            batch_scores = [batch_scores]
+                        scores.extend(batch_scores)
 
             # Pair chunks with new scores
             reranked = sorted(
@@ -180,3 +227,4 @@ class BGEReranker:
         except Exception as exc:
             logger.error("reranking_failed", error=str(exc))
             raise RerankerError(f"Reranking failed: {exc}") from exc
+

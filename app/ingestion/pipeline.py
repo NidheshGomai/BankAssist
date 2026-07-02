@@ -100,14 +100,14 @@ class IngestionPipeline:
         # We return (main_count + parent_count, parsed_doc.page_count)
         return main_count + parent_count, parsed_doc.page_count
 
-    def ingest_single_file(
+    async def ingest_single_file(
         self,
         file_path: Path,
         category: str,
         title: str,
     ) -> tuple[DocumentRecord, int, int]:
         """
-        Synchronously ingest a single locally uploaded PDF file.
+        Ingest a single locally uploaded PDF file.
         Used by the /upload route.
         """
         import uuid  # noqa: PLC0415
@@ -138,15 +138,10 @@ class IngestionPipeline:
         self._registry.upsert(record)
 
         try:
-            # Run default callback synchronously using asyncio
-            loop = asyncio.get_event_loop()
-            
             record.status = DocumentStatus.CHUNKING
             self._registry.upsert(record)
             
-            chunk_count, page_count = loop.run_until_complete(
-                self._process_callback(record, pdf_bytes)
-            )
+            chunk_count, page_count = await self._process_callback(record, pdf_bytes)
 
             record.mark_indexed(chunk_count, page_count)
             record.status = DocumentStatus.INDEXED
@@ -163,6 +158,15 @@ class IngestionPipeline:
             record.mark_failed(str(exc))
             self._registry.upsert(record)
             raise exc
+
+    def ingest_single_file_sync(
+        self,
+        file_path: Path,
+        category: str,
+        title: str,
+    ) -> tuple[DocumentRecord, int, int]:
+        """Synchronous wrapper for ingest_single_file (for Streamlit/CLI use)."""
+        return asyncio.run(self.ingest_single_file(file_path, category, title))
 
     # -----------------------------------------------------------------------
     # Full Pipeline Run

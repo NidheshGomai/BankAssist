@@ -18,6 +18,7 @@ from __future__ import annotations
 import time
 import uuid
 from collections import defaultdict
+from threading import Lock
 from typing import Callable
 
 from fastapi import FastAPI, Request, Response, status
@@ -69,7 +70,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 capacity=self.settings.rate_limit_burst,
             )
         )
-        self._lock = threading_lock = uuid.uuid4() # Mock lock anchor
+        self._lock = Lock()
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if not self.settings.rate_limit_enabled:

@@ -429,9 +429,6 @@ class PDFParser:
                 engine="pymupdf",
             ) from exc
 
-        # Also open pdfplumber for table extraction on same content
-        import pdfplumber
-
         try:
             fitz_doc = fitz.open(stream=content, filetype="pdf")
         except Exception as exc:
@@ -452,16 +449,11 @@ class PDFParser:
         # Extract table of contents / outline
         toc_text = self._extract_toc_pymupdf(fitz_doc)
 
-        # Open pdfplumber for table extraction
-        try:
-            plumber_doc = pdfplumber.open(io.BytesIO(content))
-        except Exception:  # noqa: BLE001
-            plumber_doc = None
-
         builder = _SectionBuilder()
         all_tables_ordered: list[ParsedTable] = []
         current_list_items: list[ParsedListItem] = []
         typical_margin: float = 50.0  # Estimated left margin
+        page_index = 0
 
         for page_index in range(len(fitz_doc)):
             page = fitz_doc[page_index]
@@ -472,15 +464,8 @@ class PDFParser:
             # --- Extract tables for this page ---
             page_tables: list[ParsedTable] = []
             if self._settings.parser_extract_tables:
-                # pdfplumber table extraction
-                if plumber_doc and page_index < len(plumber_doc.pages):
-                    plumber_page = plumber_doc.pages[page_index]
-                    page_tables = self._table_extractor.extract_from_page(
-                        plumber_page, page_number
-                    )
-                # PyMuPDF supplemental extraction
-                if not page_tables:
-                    page_tables = extract_tables_pymupdf(page, page_number)
+                # Fast C++ based PyMuPDF table extraction
+                page_tables = extract_tables_pymupdf(page, page_number)
                 all_tables_ordered.extend(page_tables)
 
             # --- Table bounding boxes for text exclusion ---
@@ -631,8 +616,6 @@ class PDFParser:
                 builder.add_block(table)
 
         fitz_doc.close()
-        if plumber_doc:
-            plumber_doc.close()
 
         # Merge multi-page tables
         merged_tables = self._table_extractor.merge_continuation_tables(
@@ -647,7 +630,7 @@ class PDFParser:
             source_url=source_url,
             category=category,
             language=language,
-            page_count=page_index + 1 if "page_index" in dir() else 0,
+            page_count=len(fitz_doc),
             file_size_bytes=len(content),
             parse_engine="pymupdf",
             sections=sections,
@@ -694,6 +677,7 @@ class PDFParser:
         builder = _SectionBuilder()
         all_tables_ordered: list[ParsedTable] = []
         current_list_items: list[ParsedListItem] = []
+        page_number = 0
 
         for page_number, page in enumerate(pdf.pages, 1):
             # Extract tables first
@@ -831,7 +815,7 @@ class PDFParser:
             source_url=source_url,
             category=category,
             language=language,
-            page_count=len(list(range(page_number))),
+            page_count=page_number,
             file_size_bytes=len(content),
             parse_engine="pdfplumber",
             sections=builder.build(),

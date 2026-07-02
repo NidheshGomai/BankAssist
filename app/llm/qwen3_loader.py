@@ -16,12 +16,12 @@ Model Loading Architecture
 
 Windows / CUDA Notes
 --------------------
-- On Windows with RTX 3050, torch.cuda.is_available() may return False
-  during import time due to DLL load order. We use `device_map="auto"` and
-  let transformers handle placement.
-- `bitsandbytes` Windows support requires bitsandbytes-windows package.
+- RTX 3050 6GB with CUDA 13.3 driver: 4-bit NF4 quantization + LoRA
+  adapter fits within 6 GB VRAM (~2.5 GB for 4B model + overhead).
+- `device_map="auto"` with `accelerate` handles layer placement.
 - FP16 is used instead of BF16 on the RTX 3050 (Ampere supports BF16 but
-  bitsandbytes + fp16 is more stable on Windows).
+  fp16 is more stable with bitsandbytes on Windows).
+- Falls back to CPU (FP32, no quantization) when CUDA is unavailable.
 
 Singleton Pattern
 -----------------
@@ -117,42 +117,70 @@ class Qwen3Model:
                     quantization=settings.llm_quantization,
                 )
 
-                # Quantization config
+                # Quantization config (only if CUDA is available — CPU doesn't support bitsandbytes)
                 bnb_config = None
-                if settings.llm_quantization == "4bit":
+                if settings.llm_quantization == "4bit" and torch.cuda.is_available():
                     bnb_config = BitsAndBytesConfig(
                         load_in_4bit=True,
                         bnb_4bit_quant_type="nf4",
                         bnb_4bit_compute_dtype=torch.float16,
                         bnb_4bit_use_double_quant=True,
                     )
-                elif settings.llm_quantization == "8bit":
+                elif settings.llm_quantization == "4bit" and not torch.cuda.is_available():
+                    logger.warning("CUDA not available — falling back to CPU without quantization for Qwen3")
+                    bnb_config = None
+                elif settings.llm_quantization == "8bit" and torch.cuda.is_available():
                     bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 
                 # Load tokenizer
                 logger.info("loading_qwen3_tokenizer")
-                self._tokenizer = AutoTokenizer.from_pretrained(
-                    base_model_id,
-                    trust_remote_code=True,
-                    padding_side="left",
-                )
+                try:
+                    self._tokenizer = AutoTokenizer.from_pretrained(
+                        base_model_id,
+                        trust_remote_code=True,
+                        padding_side="left",
+                    )
+                except Exception as e:
+                    logger.warning("tokenizer_remote_load_failed_trying_local", error=str(e))
+                    self._tokenizer = AutoTokenizer.from_pretrained(
+                        base_model_id,
+                        trust_remote_code=True,
+                        padding_side="left",
+                        local_files_only=True,
+                    )
                 if self._tokenizer.pad_token is None:
                     self._tokenizer.pad_token = self._tokenizer.eos_token
 
                 # Load base model
                 logger.info("loading_qwen3_base_weights")
-                model_kwargs: dict[str, Any] = {
-                    "trust_remote_code": True,
-                    "device_map": "auto",
-                    "torch_dtype": torch.float16,
-                }
+                if torch.cuda.is_available():
+                    model_kwargs: dict[str, Any] = {
+                        "trust_remote_code": True,
+                        "device_map": "auto",
+                        "torch_dtype": torch.float16,
+                        "low_cpu_mem_usage": True,
+                    }
+                else:
+                    model_kwargs = {
+                        "trust_remote_code": True,
+                        "torch_dtype": torch.float32,
+                        "low_cpu_mem_usage": True,
+                    }
                 if bnb_config:
                     model_kwargs["quantization_config"] = bnb_config
 
-                base_model = AutoModelForCausalLM.from_pretrained(
-                    base_model_id,
-                    **model_kwargs,
-                )
+                try:
+                    base_model = AutoModelForCausalLM.from_pretrained(
+                        base_model_id,
+                        **model_kwargs,
+                    )
+                except Exception as e:
+                    logger.warning("model_remote_load_failed_trying_local", error=str(e))
+                    model_kwargs["local_files_only"] = True
+                    base_model = AutoModelForCausalLM.from_pretrained(
+                        base_model_id,
+                        **model_kwargs,
+                    )
 
                 # Attach LoRA adapter if it exists
                 if lora_path.exists():
@@ -215,25 +243,45 @@ class Qwen3Model:
         _sample = do_sample if do_sample is not None else settings.llm_do_sample
         _top_p = top_p or settings.llm_top_p
 
+        # If thinking mode is disabled, and prompt ends with assistant start tag, bypass it by prefilling empty think tags
+        if not settings.llm_thinking_mode:
+            assistant_tag = "<|im_start|>assistant\n"
+            if prompt.endswith(assistant_tag):
+                prompt = prompt + "<think>\n\n</think>\n\n"
+            elif prompt.endswith("<|im_start|>assistant"):
+                prompt = prompt + "\n<think>\n\n</think>\n\n"
+
         try:
+            # truncation_side="left" preserves the assistant start tag at the end of prompt
+            self._tokenizer.truncation_side = "left"
             inputs = self._tokenizer(
                 prompt,
                 return_tensors="pt",
                 truncation=True,
-                max_length=4096,
+                max_length=settings.llm_max_length,
             ).to(self._model.device)
 
             with torch.no_grad():
+                # Qwen models can end with either <|im_end|> (151645) or <|endoftext|> (151643)
+                eos_ids = [self._tokenizer.eos_token_id, 151643]
                 gen_kwargs: dict[str, Any] = {
                     "max_new_tokens": _max_tokens,
                     "do_sample": _sample,
                     "repetition_penalty": settings.llm_repetition_penalty,
                     "pad_token_id": self._tokenizer.pad_token_id,
-                    "eos_token_id": self._tokenizer.eos_token_id,
+                    "eos_token_id": eos_ids,
                 }
                 if _sample:
                     gen_kwargs["temperature"] = _temp
                     gen_kwargs["top_p"] = _top_p
+
+                if _sample:
+                    self._model.generation_config.temperature = _temp
+                    self._model.generation_config.top_p = _top_p
+                else:
+                    # Reset to defaults to avoid conflicting config warnings
+                    self._model.generation_config.temperature = None
+                    self._model.generation_config.top_p = None
 
                 output_ids = self._model.generate(
                     **inputs,
@@ -284,22 +332,33 @@ class Qwen3Model:
         settings = self.settings
         _max_tokens = max_new_tokens or settings.llm_max_new_tokens
 
+        # If thinking mode is disabled, and prompt ends with assistant start tag, bypass it by prefilling empty think tags
+        if not settings.llm_thinking_mode:
+            assistant_tag = "<|im_start|>assistant\n"
+            if prompt.endswith(assistant_tag):
+                prompt = prompt + "<think>\n\n</think>\n\n"
+            elif prompt.endswith("<|im_start|>assistant"):
+                prompt = prompt + "\n<think>\n\n</think>\n\n"
+
         try:
             from transformers import TextIteratorStreamer  # noqa: PLC0415
-
+ 
+            self._tokenizer.truncation_side = "left"
             inputs = self._tokenizer(
                 prompt,
                 return_tensors="pt",
                 truncation=True,
-                max_length=4096,
+                max_length=settings.llm_max_length,
             ).to(self._model.device)
-
+ 
             streamer = TextIteratorStreamer(
                 self._tokenizer,
                 skip_prompt=True,
                 skip_special_tokens=True,
             )
-
+ 
+            # Qwen models can end with either <|im_end|> (151645) or <|endoftext|> (151643)
+            eos_ids = [self._tokenizer.eos_token_id, 151643]
             gen_kwargs: dict[str, Any] = {
                 **inputs,
                 "streamer": streamer,
@@ -307,7 +366,7 @@ class Qwen3Model:
                 "do_sample": settings.llm_do_sample,
                 "repetition_penalty": settings.llm_repetition_penalty,
                 "pad_token_id": self._tokenizer.pad_token_id,
-                "eos_token_id": self._tokenizer.eos_token_id,
+                "eos_token_id": eos_ids,
             }
 
             # Run generation in a background thread

@@ -96,13 +96,17 @@ class HybridRetriever:
             # Dense retrieval path
             dense_results = self._dense_retrieve(query, dense_k, metadata_filters)
 
-            # Sparse retrieval path (BM25)
-            sparse_results = self._sparse_retrieve(query, sparse_k)
+            # Sparse retrieval path (BM25) — skip if disabled to save memory
+            if settings.retrieval_bm25_enabled:
+                sparse_results = self._sparse_retrieve(query, sparse_k)
 
-            # Fuse via RRF
-            fused = self._reciprocal_rank_fusion(
-                [dense_results, sparse_results], k=rrf_k
-            )
+                # Fuse via RRF
+                fused = self._reciprocal_rank_fusion(
+                    [dense_results, sparse_results], k=rrf_k
+                )
+            else:
+                logger.debug("bm25_disabled_using_dense_only")
+                fused = dense_results
 
             final = fused[:final_k]
 
@@ -110,7 +114,7 @@ class HybridRetriever:
                 "hybrid_retrieval_complete",
                 query_len=len(query),
                 dense_hits=len(dense_results),
-                sparse_hits=len(sparse_results),
+                sparse_hits=len(sparse_results) if settings.retrieval_bm25_enabled else 0,
                 fused_hits=len(fused),
                 final_hits=len(final),
             )
@@ -171,11 +175,26 @@ class HybridRetriever:
 
                 logger.info("bm25_index_building_start")
 
-                # Fetch all documents from main collection
-                raw = self.store.main_collection.get()
-                ids: list[str] = raw.get("ids", [])
-                docs: list[str] = raw.get("documents", []) or []
-                metas: list[dict] = raw.get("metadatas", []) or []
+                # Fetch all documents from main collection in batches to prevent SQLite variable limits
+                ids: list[str] = []
+                docs: list[str] = []
+                metas: list[dict] = []
+                
+                batch_size = 500
+                offset = 0
+                while True:
+                    batch = self.store.main_collection.get(
+                        limit=batch_size,
+                        offset=offset,
+                        include=["documents", "metadatas"]
+                    )
+                    batch_ids = batch.get("ids", [])
+                    if not batch_ids:
+                        break
+                    ids.extend(batch_ids)
+                    docs.extend(batch.get("documents", []) or [])
+                    metas.extend(batch.get("metadatas", []) or [])
+                    offset += batch_size
 
                 if not docs:
                     logger.warning("bm25_index_empty_corpus")

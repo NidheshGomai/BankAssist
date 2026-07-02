@@ -171,6 +171,18 @@ class QueryRewriter:
         if not self.settings.retrieval_query_rewrite:
             return [query]
 
+        # Fast-path: skip LLM call for simple, single-intent queries
+        # Only call LLM if query contains conjunctions that may join distinct intents
+        compound_indicators = [" and also ", " as well as ", " additionally ", " moreover "]
+        query_lower = query.lower()
+        is_compound = any(ind in query_lower for ind in compound_indicators)
+        # Also check for multiple question marks (likely multiple questions)
+        is_compound = is_compound or query.count("?") > 1
+
+        if not is_compound:
+            logger.debug("query_decomposition_skipped_simple_query", query_len=len(query))
+            return [query]
+
         try:
             prompt = (
                 f"<|im_start|>system\n{_DECOMPOSE_SYSTEM_PROMPT}<|im_end|>\n"
@@ -189,6 +201,9 @@ class QueryRewriter:
             for line in output.strip().splitlines():
                 line = line.strip()
                 if not line:
+                    continue
+                # Skip XML/HTML tags (e.g. <think>, </think>)
+                if re.match(r'^</?[\w]+>$', line):
                     continue
                 # Match numbered lists (e.g., "1. Query Text" or "2) Query Text")
                 match = re.match(r'^\d+[.)]\s*(.*)', line)

@@ -7,6 +7,25 @@ lifespan hooks, and global rate limiter and logging middlewares.
 
 from __future__ import annotations
 
+import os
+# CRITICAL: Prevent OpenMP runtime conflicts which cause Access Violation (0xc0000005) in arrow.dll on Windows.
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["ARROW_IO_THREADS"] = "1"
+os.environ["ARROW_ENABLE_THREAD_POOL"] = "0"
+
+try:
+    import pyarrow as pa
+    pa.set_cpu_count(1)
+    pa.set_io_thread_count(1)
+except ImportError:
+    pass
+
+# CRITICAL: FlagEmbedding must be imported at the absolute top on Windows to prevent DLL load order crashes.
+try:
+    import FlagEmbedding
+except ImportError:
+    pass
+
 import time
 from contextlib import asynccontextmanager
 from typing import Any

@@ -39,9 +39,9 @@ models:
   embedding:
     model_name: "BAAI/bge-m3"
     batch_size: 32
-    max_length: 1024
+    max_length: 512
     normalize_embeddings: true
-    device: "auto"                     # auto | cuda | cpu
+    device: "cuda"                   # auto | cuda | cpu
     cache_embeddings: true
 
   # Reranker model
@@ -49,7 +49,7 @@ models:
     model_name: "BAAI/bge-reranker-large"
     batch_size: 16
     max_length: 512
-    device: "auto"
+    device: "cuda"
     enabled: true
 
   # LLM — Fine-tuned Qwen3-4B
@@ -60,7 +60,8 @@ models:
     base_model: "Qwen/Qwen3-4B"
     lora_adapter_path: "fine tuned qwen/QWEN3 QA final"
     quantization: "4bit"               # none | 4bit | 8bit
-    device: "auto"
+    device: "cuda"
+    max_length: 2048
     max_new_tokens: 1024
     temperature: 0.1                   # Low temperature for factual accuracy
     top_p: 0.9
@@ -156,10 +157,10 @@ retrieval:
     enabled: true
     max_history_turns: 5
 
-  # Stage 2: Multi-query
+  # Stage 2: Multi-query (disabled for speed — each variant adds ~15s LLM call)
   multi_query:
-    enabled: true
-    num_variants: 3
+    enabled: false
+    num_variants: 1
 
   # Stage 3: Hybrid retrieval
   hybrid:
@@ -167,10 +168,11 @@ retrieval:
     sparse_top_k: 20
     rrf_k: 60                          # RRF constant
     final_top_k: 10
+    bm25_enabled: false                 # Disable BM25 to save ~1.5 GB RAM + 21s latency
 
   # Stage 4: Metadata filtering
   metadata_filter:
-    enabled: true
+    enabled: false
 
   # Stage 5: Reranker
   reranker:
@@ -193,6 +195,7 @@ generation:
   evidence_extraction:
     enabled: true
     max_evidence_passages: 10
+  max_context_chunks: 3
 
   # Confidence scoring
   confidence:

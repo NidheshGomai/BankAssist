@@ -15,7 +15,7 @@ from typing import Generator
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config.settings import get_settings
+from app.config.settings import get_settings, Settings
 from app.vectordb.chroma_client import ChromaClientManager
 
 
@@ -26,6 +26,12 @@ def setup_test_environment() -> Generator[None, None, None]:
     os.environ["CHROMA_DB_PATH"] = ":memory:"  # In-memory Chroma for testing speed
     yield
     # Cleanup
+
+
+@pytest.fixture(scope="function")
+def settings() -> Settings:
+    """Returns the application settings."""
+    return get_settings()
 
 
 @pytest.fixture(scope="function")

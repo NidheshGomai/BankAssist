@@ -28,6 +28,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+import torch
+
 from app.chunking.base import EnrichedChunk
 from app.config.settings import get_settings
 from app.reranker.bge_reranker import BGEReranker
@@ -237,6 +239,12 @@ class RetrievalPipeline:
             candidates=len(candidates),
         )
 
+        # --- VRAM Handoff: Unload embedder to free GPU for reranker ---
+        try:
+            self.hybrid_retriever.embedder.unload_model()
+        except Exception as exc:
+            logger.warning("embedder_unload_failed", error=str(exc))
+
         # ------------------------------------------------------------------
         # Stage 5: Cross-Encoder Reranking
         # ------------------------------------------------------------------
@@ -248,6 +256,12 @@ class RetrievalPipeline:
             reranked = candidates[:self.settings.retrieval_reranker_top_k]
         stage_counts["stage5_reranked"] = len(reranked)
         logger.debug("stage5_done_ms", ms=round((time.perf_counter() - t0) * 1000, 1))
+
+        # --- VRAM Handoff: Unload reranker to free GPU for LLM ---
+        try:
+            self.reranker.unload_model()
+        except Exception as exc:
+            logger.warning("reranker_unload_failed", error=str(exc))
 
         # ------------------------------------------------------------------
         # Stage 6: Contextual Compression (deduplication)

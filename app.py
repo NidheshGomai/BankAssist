@@ -1,8 +1,29 @@
 import os
+# CRITICAL: Prevent OpenMP runtime conflicts which cause Access Violation (0xc0000005) in arrow.dll on Windows.
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["ARROW_IO_THREADS"] = "1"
+os.environ["ARROW_ENABLE_THREAD_POOL"] = "0"
+
+# Reconfigure stdout/stderr for Indic text (₹ symbol etc.)
+import sys
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+# CRITICAL: FlagEmbedding must be imported at the absolute top on Windows to prevent DLL load order crashes.
+try:
+    import FlagEmbedding
+except ImportError:
+    pass
+
 import tempfile
 import time
 import numpy as np
 import streamlit as st
+import torch
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
 from transformers import pipeline
 from huggingface_hub import login
@@ -61,36 +82,41 @@ def get_asr_pipeline():
     if hf_token:
         login(token=hf_token)
     try:
-        return pipeline("automatic-speech-recognition", model=ASR_MODEL, chunk_length_s=30)
+        return pipeline("automatic-speech-recognition", model=ASR_MODEL, chunk_length_s=30, device=0, torch_dtype=torch.float16)
     except OSError as e:
         if "private" in str(e).lower() or "token" in str(e).lower():
             st.warning("Private model requires authentication. Please provide your Hugging Face token.")
             hf_token = st.text_input("Hugging Face Token", type="password", key="hf_token_input")
             if hf_token:
                 login(token=hf_token)
-                return pipeline("automatic-speech-recognition", model=ASR_MODEL, chunk_length_s=30)
+                return pipeline("automatic-speech-recognition", model=ASR_MODEL, chunk_length_s=30, device=0, torch_dtype=torch.float16)
         raise
 
 
 @st.cache_resource
 def get_translation_pipeline(model_name: str):
-    return pipeline("translation", model=model_name, device=-1)
+    return pipeline("translation", model=model_name, device=0, torch_dtype=torch.float16)
 
 
 @st.cache_resource
 def get_tts_pipeline():
-    return pipeline("text-to-speech", model=TTS_MODEL)
+    return pipeline("text-to-speech", model=TTS_MODEL, device=0, torch_dtype=torch.float16)
 
 
 def transcribe_audio(audio_path: str) -> str:
+    start_time = time.time()
     asr = get_asr_pipeline()
     result = asr(audio_path)
-    return result.get("text", "") if isinstance(result, dict) else str(result)
+    text = result.get("text", "") if isinstance(result, dict) else str(result)
+    print(f"[ASR] Transcription took {time.time() - start_time:.2f} seconds")
+    return text
 
 
 def translate_text(text: str, model_name: str) -> str:
+    start_time = time.time()
     translator = get_translation_pipeline(model_name)
     outputs = translator(text, max_length=1024)
+    print(f"[Translation] Translation took {time.time() - start_time:.2f} seconds")
     if isinstance(outputs, list) and outputs:
         return outputs[0].get("translation_text", outputs[0].get("text", ""))
     if isinstance(outputs, dict):
@@ -110,8 +136,10 @@ def process_query_with_llm(english_text: str) -> str:
 
 
 def synthesize_speech(text: str, output_path: str) -> str:
+    start_time = time.time()
     tts = get_tts_pipeline()
     result = tts(text)
+    print(f"[TTS] Speech synthesis took {time.time() - start_time:.2f} seconds")
     if isinstance(result, dict):
         audio = result.get("audio")
         sampling_rate = result.get("sampling_rate", 22050)

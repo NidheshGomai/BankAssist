@@ -9,9 +9,18 @@ Uses pydantic-settings for type safety and validation.
 from __future__ import annotations
 
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+
+# Reconfigure stdout/stderr on Windows to prevent UnicodeEncodeError for Indic text/Rupee symbol
+if sys.platform.startswith("win"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 import yaml
 from pydantic import Field, field_validator, model_validator
@@ -187,6 +196,7 @@ class Settings(BaseSettings):
         default=_yaml("models.llm.quantization", "4bit")
     )
     llm_device: str = Field(default=_yaml("models.llm.device", "auto"))
+    llm_max_length: int = Field(default=_yaml("models.llm.max_length", 2048))
     llm_max_new_tokens: int = Field(
         default=_yaml("models.llm.max_new_tokens", 1024)
     )
@@ -367,8 +377,14 @@ class Settings(BaseSettings):
     retrieval_final_top_k: int = Field(
         default=_yaml("retrieval.hybrid.final_top_k", 10)
     )
+    retrieval_bm25_enabled: bool = Field(
+        default=_yaml("retrieval.hybrid.bm25_enabled", True)
+    )
     retrieval_reranker_top_k: int = Field(
         default=_yaml("retrieval.reranker.top_k", 8)
+    )
+    retrieval_metadata_filter: bool = Field(
+        default=_yaml("retrieval.metadata_filter.enabled", True)
     )
     retrieval_compression_similarity: float = Field(
         default=_yaml("retrieval.compression.similarity_threshold", 0.92)
@@ -377,6 +393,9 @@ class Settings(BaseSettings):
     # -----------------------------------------------------------------------
     # Generation / Confidence
     # -----------------------------------------------------------------------
+    llm_max_context_chunks: int = Field(
+        default=_yaml("generation.max_context_chunks", 3)
+    )
     confidence_min_threshold: float = Field(
         default=_yaml("generation.confidence.min_threshold", 0.40)
     )

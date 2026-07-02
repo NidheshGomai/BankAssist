@@ -197,11 +197,12 @@ class BGEEmbedder:
                 )
 
                 # Initialize BGEM3FlagModel.
-                # BGE-M3 is 1024-dim dense by default. We use fp16 for faster inference on RTX 3050.
+                # BGE-M3 is 1024-dim dense by default. We use fp16 for faster inference on CUDA/MPS.
+                use_fp16 = "cuda" in str(self.device).lower() or "mps" in str(self.device).lower()
                 self.model = BGEM3FlagModel(
                     model_name_or_path=self.model_name,
                     normalize_embeddings=self.normalize,
-                    use_fp16=True,
+                    use_fp16=use_fp16,
                     devices=self.device,
                     passage_max_length=self.max_length,
                 )
@@ -229,6 +230,26 @@ class BGEEmbedder:
                     f"Failed to load embedding model {self.model_name}: {e}"
                 ) from e
 
+    def unload_model(self) -> None:
+        """
+        Unload the embedding model from memory to free VRAM/RAM.
+        Used for sequential VRAM handoff on low-memory systems.
+        The model will be lazily reloaded on the next embed call.
+        """
+        with self._model_lock:
+            if self.model is not None:
+                logger.info("unloading_embedding_model", model_name=self.model_name)
+                del self.model
+                self.model = None
+
+                import torch  # noqa: PLC0415
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                import gc  # noqa: PLC0415
+                gc.collect()
+                logger.info("embedding_model_unloaded_successfully")
+
     def embed_documents(self, texts: list[str]) -> list[np.ndarray]:
         """
         Generate dense embeddings for a list of texts.
@@ -236,9 +257,6 @@ class BGEEmbedder:
         """
         if not texts:
             return []
-
-        # Ensure model is loaded before checking cache to fail fast on model load issues
-        self.load_model()
 
         cached_embs: dict[str, np.ndarray] = {}
         uncached_texts = texts.copy()
@@ -259,6 +277,7 @@ class BGEEmbedder:
         # 2. Compute missing embeddings
         computed_embs: dict[str, np.ndarray] = {}
         if uncached_texts:
+            self.load_model()
             try:
                 unique_uncached = list(set(uncached_texts))
                 logger.info(

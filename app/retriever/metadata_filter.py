@@ -123,7 +123,7 @@ class MetadataFilterBuilder:
             A dict like {"doc_category": "retail"} or None if no strong
             signal detected (no filter → full corpus search).
         """
-        if not self.settings.retrieval_multi_query:  # Uses same enable flag
+        if not self.settings.retrieval_metadata_filter:
             return None
 
         filters: dict[str, Any] = {}

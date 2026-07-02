@@ -7,6 +7,9 @@ from app.chunking.metadata_enricher import MetadataEnricher
 from app.chunking.orchestrator import ChunkingOrchestrator
 from app.chunking.token_counter import count_tokens, get_token_counter
 
+# Alias for backward compatibility with tests
+HierarchicalChunker = ParentChildChunker
+
 __all__ = [
     "EnrichedChunk",
     "BaseChunker",
@@ -15,6 +18,7 @@ __all__ = [
     "TableChunker",
     "MetadataEnricher",
     "ChunkingOrchestrator",
+    "HierarchicalChunker",
     "count_tokens",
     "get_token_counter",
 ]
